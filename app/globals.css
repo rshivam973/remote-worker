@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg: #0a0a0b;
+  --panel: #121214;
+  --panel-2: #17171a;
+  --line: #28282e;
+  --line-bright: #3a3a42;
+  --ink: #e9e7e2;
+  --muted: #8b8b86;
+  --faint: #5a5a55;
+  --amber: #f5a524;
+  --amber-deep: #c77d11;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --sky: #56b6ff;
+}
+
+* {
+  border-color: var(--line);
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Blueprint grid + warm vignette */
+  background-image:
+    linear-gradient(var(--bg), var(--bg)),
+    repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(255, 255, 255, 0.018) 31px, rgba(255, 255, 255, 0.018) 32px),
+    repeating-linear-gradient(90deg, transparent, transparent 31px, rgba(255, 255, 255, 0.018) 31px, rgba(255, 255, 255, 0.018) 32px),
+    radial-gradient(120% 80% at 80% -10%, rgba(245, 165, 36, 0.07), transparent 60%);
+  background-blend-mode: normal;
+}
+
+.font-mono { font-family: var(--font-mono), ui-monospace, "SF Mono", monospace; }
+
+/* Thin tactile scrollbars */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2c2c33; border-radius: 0; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #3a3a42; }
+
+/* Status dot pulse */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.dot-live { animation: pulse-dot 1.4s ease-in-out infinite; }
+
+/* Staggered entrance for log lines */
+@keyframes line-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.line-in { animation: line-in 0.18s ease-out both; }
+
+/* Modal backdrop + panel */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(0.99); } to { opacity: 1; transform: none; } }
+.fade-in { animation: fade-in 0.15s ease-out both; }
+.pop-in { animation: pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both; }
