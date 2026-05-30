@@ -12,6 +12,7 @@ const TONES: Record<string, string> = {
   ok: "text-ok",
   warn: "text-warn",
   err: "text-err",
+  usermsg: "text-amber font-medium",
 };
 
 export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () => void }) {
@@ -63,15 +64,39 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [events]);
 
-  async function control(body: Record<string, unknown>) {
-    await fetch(`/api/jobs/${jobId}/control`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (body.type === "stop") {
-      void refreshDetail();
-      onChange();
+  // Append a client-only note to the log (e.g. delivery failures).
+  const note = (message: string, level: "info" | "error" = "info") =>
+    setEvents((prev) => [...prev, { type: "platform", level, message }]);
+
+  const SLASH = new Set(["status", "interrupt", "resume", "stop"]);
+
+  async function send() {
+    const raw = chat.trim();
+    if (!raw) return;
+    setChat("");
+
+    const slash = raw.startsWith("/") ? raw.slice(1).split(/\s+/)[0]?.toLowerCase() : null;
+    if (slash === "help") {
+      note("commands: /status · /interrupt · /resume · /stop · or just type to steer the agent");
+      return;
+    }
+    const body = slash && SLASH.has(slash) ? { type: slash } : { type: "chat", text: raw };
+
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/control`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        note(d.error || "couldn't reach the agent (it isn't running)", "error");
+      } else if (body.type === "stop") {
+        void refreshDetail();
+        onChange();
+      }
+    } catch {
+      note("network error sending message", "error");
     }
   }
 
@@ -92,13 +117,6 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
     } finally {
       setBusy(null);
     }
-  }
-
-  async function sendChat() {
-    const text = chat.trim();
-    if (!text) return;
-    setChat("");
-    await control({ type: "chat", text });
   }
 
   const prUrl = detail?.pr_url ?? findPr(events);
@@ -153,23 +171,27 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
         ))}
       </div>
 
-      {/* Agent control bar */}
+      {/* Chat — the single, always-on interface to the agent */}
       <div className="border-t border-line bg-panel/40 px-5 py-3">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
           <input
             value={chat}
             onChange={(e) => setChat(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && isRunning && sendChat()}
-            disabled={!isRunning}
-            placeholder={isRunning ? "Steer or ask the agent…" : "Agent is not running"}
-            className="min-w-[200px] flex-1 rounded-sm border border-line bg-bg/60 px-3 py-2 text-sm placeholder:text-faint focus:border-amber focus:outline-none disabled:opacity-50"
+            onKeyDown={(e) => e.key === "Enter" && send()}
+            placeholder="Message the agent — type to steer, or /status /interrupt /resume /stop"
+            className="min-w-[200px] flex-1 rounded-sm border border-line bg-bg/60 px-3 py-2 text-sm placeholder:text-faint focus:border-amber focus:outline-none"
           />
-          <CtlButton label="Send" primary disabled={!isRunning} onClick={sendChat} />
-          <CtlButton label="Status" disabled={!isRunning} onClick={() => control({ type: "status" })} />
-          <CtlButton label="Interrupt" disabled={!isRunning} onClick={() => control({ type: "interrupt" })} />
-          <CtlButton label="Resume" disabled={!isRunning} onClick={() => control({ type: "resume" })} />
-          <CtlButton label="Stop" danger disabled={!isRunning} onClick={() => control({ type: "stop" })} />
+          <button
+            onClick={send}
+            className="bg-amber px-4 py-2 text-xs font-bold uppercase tracking-wider text-black hover:bg-amber-deep transition-colors"
+          >
+            Send
+          </button>
         </div>
+        <p className="mt-1.5 font-mono text-[10px] text-faint">
+          <span className="text-muted">/status</span> · <span className="text-muted">/interrupt</span> ·{" "}
+          <span className="text-muted">/resume</span> · <span className="text-muted">/stop</span> · or just type to steer
+        </p>
       </div>
     </div>
   );
@@ -217,19 +239,6 @@ function SbButton({ label, onClick, disabled, busy, danger }: { label: string; o
   );
 }
 
-function CtlButton({ label, onClick, disabled, primary, danger }: { label: string; onClick: () => void; disabled?: boolean; primary?: boolean; danger?: boolean }) {
-  const cls = primary
-    ? "bg-amber text-black hover:bg-amber-deep"
-    : danger
-      ? "border border-err/40 text-err hover:bg-err/10"
-      : "border border-line text-muted hover:border-line-bright hover:text-ink";
-  return (
-    <button onClick={onClick} disabled={disabled} className={`px-3 py-2 text-xs uppercase tracking-wider transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${cls}`}>
-      {label}
-    </button>
-  );
-}
-
 function coalesce(events: PiEvent[]): PiEvent[] {
   const out: PiEvent[] = [];
   for (const e of events) {
@@ -255,6 +264,8 @@ function EventLine({ e }: { e: PiEvent }) {
 
 function render(e: PiEvent): { tone: string; content: React.ReactNode } {
   switch (e.type) {
+    case "user_msg":
+      return { tone: "usermsg", content: `› ${String(e.text)}` };
     case "platform":
       return { tone: e.level === "error" ? "err" : "dim", content: `» ${String(e.message)}` };
     case "phase":

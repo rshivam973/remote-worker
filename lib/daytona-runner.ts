@@ -51,6 +51,8 @@ export class DaytonaRunner {
   private sandbox: Sandbox | null = null;
   private sessionId: string | null = null;
   private cmdId: string | null = null;
+  /** Control commands sent before pi-coder is running; flushed once it starts. */
+  private pendingControl: ControlCommand[] = [];
 
   constructor(private readonly cfg: RunnerConfig) {
     this.daytona = new Daytona({ apiKey: cfg.apiKey });
@@ -157,6 +159,15 @@ export class DaytonaRunner {
     const res = await sandbox.process.executeSessionCommand(this.sessionId, { command: cmd, runAsync: true });
     this.cmdId = res.cmdId;
 
+    // Flush any control commands the user sent while we were still booting.
+    for (const c of this.pendingControl.splice(0)) {
+      try {
+        await sandbox.process.sendSessionCommandInput(this.sessionId, this.cmdId, JSON.stringify(c) + "\n");
+      } catch {
+        /* best-effort */
+      }
+    }
+
     // Buffer partial lines; emit only complete NDJSON lines.
     let buf = "";
     const onStdout = (chunk: string) => {
@@ -179,9 +190,12 @@ export class DaytonaRunner {
     if (buf.trim()) onStdout("\n");
   }
 
-  /** Relay a control command to pi-coder's stdin. */
+  /** Relay a control command to pi-coder's stdin (buffered until it's running). */
   async sendControl(cmd: ControlCommand): Promise<void> {
-    if (!this.sessionId || !this.cmdId) throw new Error("pi-coder not running");
+    if (!this.sessionId || !this.cmdId) {
+      this.pendingControl.push(cmd);
+      return;
+    }
     await this.sb().process.sendSessionCommandInput(this.sessionId, this.cmdId, JSON.stringify(cmd) + "\n");
   }
 

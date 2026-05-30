@@ -24,6 +24,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   try {
     await jobManager.sendControl(id, parsed.data);
+    // Echo the user's chat into the event stream so it shows in the log + persists.
+    if (parsed.data.type === "chat") {
+      jobManager.pushEvent(id, { type: "user_msg", text: parsed.data.text, ts: new Date().toISOString() });
+    }
     if (parsed.data.type === "stop") jobManager.setStatus(id, "stopped");
     return NextResponse.json({ ok: true });
   } catch (err) {
