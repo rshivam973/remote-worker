@@ -3,6 +3,7 @@ import { jobRequestSchema } from "@/lib/contracts";
 import { jobManager } from "@/lib/job-manager";
 import { startJob } from "@/lib/orchestrate";
 import { deriveIssueId } from "@/lib/task-builder";
+import { storeEnabled, listConversations } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +34,21 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
+  // DB is the durable source of truth (survives restarts); fall back to memory.
+  if (storeEnabled()) {
+    const rows = await listConversations();
+    return NextResponse.json({
+      jobs: rows.map((r) => ({
+        id: r.id,
+        status: r.status,
+        issue_id: r.issue_id,
+        repo: r.repo,
+        sandbox_state: r.sandbox_state,
+        pr_url: r.pr_url,
+        created_at: r.created_at,
+      })),
+    });
+  }
   return NextResponse.json({
     jobs: jobManager.list().map((j) => ({
       id: j.id,

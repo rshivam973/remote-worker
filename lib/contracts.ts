@@ -36,6 +36,8 @@ export type JobStatus =
   | "failed"
   | "stopped";
 
+export type SandboxState = "pending" | "active" | "stopped" | "destroyed";
+
 /** One NDJSON event as emitted by pi-coder on stdout (loose by design). */
 export interface PiEvent {
   type: string;

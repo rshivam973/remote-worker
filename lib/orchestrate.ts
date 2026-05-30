@@ -30,8 +30,7 @@ async function run(job: Job, request: JobRequest): Promise<void> {
     jobManager.setStatus(id, "provisioning");
     jobManager.emitPlatform(id, "Provisioning Daytona sandbox…");
     await runner.provision(env);
-    job.sandboxId = runner.sandboxId;
-    job.sandboxState = "active";
+    jobManager.update(id, { sandboxId: runner.sandboxId, sandboxState: "active" });
     jobManager.emitPlatform(id, `Sandbox ready (${runner.sandboxId}).`);
 
     jobManager.setStatus(id, "bootstrapping");
@@ -55,32 +54,33 @@ async function run(job: Job, request: JobRequest): Promise<void> {
     // Process exited — capture the final result.
     const result = await runner.readResult();
     const status = (result?.status as string) ?? job.resultStatus ?? "unknown";
-    job.resultStatus = status;
+    let prUrl: string | undefined;
     if (typeof result?.artifacts === "object" && result.artifacts) {
       const pr = (result.artifacts as Record<string, unknown>).pr_url;
-      if (typeof pr === "string") job.prUrl = pr;
+      if (typeof pr === "string") prUrl = pr;
     }
 
-    if (jobManager.get(id)?.status === "stopped") {
-      // user-initiated stop already set terminal status
-    } else {
-      jobManager.setStatus(id, status === "failed" ? "failed" : "completed");
-    }
+    const alreadyStopped = jobManager.get(id)?.status === "stopped";
+    jobManager.update(id, {
+      resultStatus: status,
+      prUrl,
+      status: alreadyStopped ? undefined : status === "failed" ? "failed" : "completed",
+    });
     jobManager.emitPlatform(id, `Run finished with status: ${status}.`);
   } catch (err) {
     fail(id, (err as Error).message);
   } finally {
     // Keep the sandbox alive so it can be inspected, resumed, or destroyed from
     // the dashboard. Daytona's autoStop/autoDelete intervals are the backstops.
-    if (job.sandboxState === "active") {
+    if (jobManager.get(id)?.sandboxState === "active") {
       jobManager.emitPlatform(id, "Sandbox kept alive — stop, resume, or destroy it from the console.");
     }
+    // Flush the remaining event log to the DB and close the batcher.
+    await jobManager.endPersistence(id);
   }
 }
 
 function fail(id: string, message: string): void {
-  jobManager.setStatus(id, "failed");
-  const job = jobManager.get(id);
-  if (job) job.error = message;
+  jobManager.update(id, { status: "failed", error: message });
   jobManager.emitPlatform(id, message, "error");
 }
