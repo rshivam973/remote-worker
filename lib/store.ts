@@ -19,6 +19,7 @@ import type { PiEvent, JobStatus, SandboxDetails, SandboxState } from "./contrac
 export interface ConversationRow {
   id: string;
   owner_id: string;
+  title: string | null;
   status: JobStatus;
   issue_id: string | null;
   repo: string;
@@ -31,15 +32,26 @@ export interface ConversationRow {
   pr_url: string | null;
   result_status: string | null;
   error: string | null;
+  archived_at: string | null;
   created_at: string;
 }
 
 export type ConversationPatch = Partial<
   Pick<
     ConversationRow,
-    "status" | "sandbox_id" | "sandbox_state" | "sandbox_details" | "pr_url" | "result_status" | "error"
+    | "title"
+    | "status"
+    | "sandbox_id"
+    | "sandbox_state"
+    | "sandbox_details"
+    | "pr_url"
+    | "result_status"
+    | "error"
+    | "archived_at"
   >
 >;
+
+export type MutationResult = { ok: true } | { ok: false; error: string };
 
 let client: SupabaseClient | null | undefined;
 
@@ -71,30 +83,58 @@ export function insertConversation(row: ConversationRow): void {
     .then(({ error }) => error && console.error("[store] insertConversation:", error.message));
 }
 
-export function updateConversation(id: string, patch: ConversationPatch): void {
-  const db = getClient();
-  if (!db) return;
-  void db
-    .from("conversations")
-    .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .then(({ error }) => error && console.error("[store] updateConversation:", error.message));
+function compactPatch(patch: ConversationPatch): ConversationPatch {
+  return Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) as ConversationPatch;
 }
 
-export async function listConversations(ownerId: string): Promise<ConversationRow[]> {
+function describeStoreError(error: { message: string; code?: string; hint?: string | null }): string {
+  return [error.message, error.code ? `code: ${error.code}` : null, error.hint ? `hint: ${error.hint}` : null]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+export async function updateConversation(id: string, patch: ConversationPatch): Promise<MutationResult> {
+  const db = getClient();
+  if (!db) return { ok: true };
+  const cleanPatch = compactPatch(patch);
+  const { error } = await db
+    .from("conversations")
+    .update({ ...cleanPatch, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) {
+    const message = describeStoreError(error);
+    console.error("[store] updateConversation:", message);
+    return { ok: false, error: message };
+  }
+  return { ok: true };
+}
+
+export async function listConversations(ownerId: string, archived = false): Promise<ConversationRow[]> {
   const db = getClient();
   if (!db) return [];
-  const { data, error } = await db
+  let q = db
     .from("conversations")
     .select("*")
-    .eq("owner_id", ownerId)
-    .order("created_at", { ascending: false })
-    .limit(200);
+    .eq("owner_id", ownerId);
+  q = archived ? q.not("archived_at", "is", null) : q.is("archived_at", null);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(200);
   if (error) {
     console.error("[store] listConversations:", error.message);
     return [];
   }
   return (data ?? []) as ConversationRow[];
+}
+
+export async function deleteConversation(id: string, ownerId: string): Promise<MutationResult> {
+  const db = getClient();
+  if (!db) return { ok: true };
+  const { error } = await db.from("conversations").delete().eq("id", id).eq("owner_id", ownerId);
+  if (error) {
+    const message = describeStoreError(error);
+    console.error("[store] deleteConversation:", message);
+    return { ok: false, error: message };
+  }
+  return { ok: true };
 }
 
 export async function getConversation(id: string, ownerId: string): Promise<ConversationRow | null> {

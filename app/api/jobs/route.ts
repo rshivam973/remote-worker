@@ -37,35 +37,40 @@ export async function POST(req: Request) {
   return NextResponse.json({ job_id: job.id });
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const userId = await currentUserId();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const archived = new URL(req.url).searchParams.get("archived") === "true";
 
   // DB is the durable source of truth (survives restarts); fall back to memory.
   if (storeEnabled()) {
-    const rows = await listConversations(userId);
+    const rows = await listConversations(userId, archived);
     return NextResponse.json({
       jobs: rows.map((r) => ({
         id: r.id,
+        title: r.title,
         status: r.status,
         issue_id: r.issue_id,
         repo: r.repo,
         sandbox_state: r.sandbox_state,
         sandbox_details: r.sandbox_details,
         pr_url: r.pr_url,
+        archived_at: r.archived_at,
         created_at: r.created_at,
       })),
     });
   }
   return NextResponse.json({
-    jobs: jobManager.list(userId).map((j) => ({
+    jobs: jobManager.list(userId, archived).map((j) => ({
       id: j.id,
+      title: j.title,
       status: j.status,
       issue_id: j.request.issue_id,
       repo: j.request.repo,
       sandbox_state: j.sandboxState,
       sandbox_details: j.sandboxDetails,
       pr_url: j.prUrl,
+      archived_at: j.archivedAt,
       created_at: j.createdAt,
     })),
   });

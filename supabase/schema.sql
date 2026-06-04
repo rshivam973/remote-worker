@@ -7,6 +7,7 @@
 create table if not exists conversations (
   id             uuid primary key,
   owner_id       text not null,
+  title          text,
   status         text not null,
   issue_id       text,
   repo           text not null,
@@ -19,6 +20,7 @@ create table if not exists conversations (
   pr_url         text,
   result_status  text,
   error          text,
+  archived_at    timestamptz,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
@@ -27,7 +29,13 @@ alter table conversations
   add column if not exists owner_id text;
 
 alter table conversations
+  add column if not exists title text;
+
+alter table conversations
   add column if not exists sandbox_details jsonb;
+
+alter table conversations
+  add column if not exists archived_at timestamptz;
 
 create table if not exists events (
   id              bigint generated always as identity primary key,
@@ -46,6 +54,9 @@ create index if not exists conversations_created_at_idx
 
 create index if not exists conversations_owner_created_idx
   on conversations (owner_id, created_at desc);
+
+create index if not exists conversations_owner_archive_created_idx
+  on conversations (owner_id, archived_at, created_at desc);
 
 alter table conversations enable row level security;
 alter table events enable row level security;
