@@ -68,3 +68,20 @@ export async function refreshSandboxDetails(sandboxId: string | null): Promise<S
     return null;
   }
 }
+
+export async function destroySandboxById(sandboxId: string | null): Promise<SandboxDetails | null> {
+  if (!sandboxId) return null;
+  try {
+    const apiKey = process.env.DAYTONA_API_KEY;
+    if (!apiKey) return null;
+    const daytona = new Daytona({ apiKey });
+    const sandbox = await daytona.get(sandboxId);
+    await sandbox.delete(60);
+    return destroyedSandboxSnapshot(sandboxId, "Sandbox was destroyed while deleting the conversation.");
+  } catch (err) {
+    if (err instanceof DaytonaNotFoundError || (err as { statusCode?: number }).statusCode === 404) {
+      return destroyedSandboxSnapshot(sandboxId, "Sandbox was already destroyed or deleted.");
+    }
+    return null;
+  }
+}

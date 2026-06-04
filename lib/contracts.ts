@@ -65,6 +65,11 @@ export interface PiEvent {
   [key: string]: unknown;
 }
 
+export const conversationUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(120).optional(),
+  archived: z.boolean().optional(),
+});
+
 export type ControlCommand =
   | { type: "chat"; text: string }
   | { type: "status" }

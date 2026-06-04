@@ -29,12 +29,14 @@ export interface SandboxDetails {
 
 export interface JobSummary {
   id: string;
+  title: string | null;
   status: JobStatus;
   issue_id: string;
   repo: string;
   sandbox_state: SandboxState;
   sandbox_details: SandboxDetails | null;
   pr_url: string | null;
+  archived_at: string | null;
   created_at: string;
 }
 

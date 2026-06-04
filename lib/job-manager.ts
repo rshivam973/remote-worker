@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { JobRequest, JobStatus, SandboxDetails, SandboxState, PiEvent, ControlCommand } from "./contracts";
 import type { DaytonaRunner } from "./daytona-runner";
 import * as store from "./store";
+import type { MutationResult } from "./store";
 
 /** Request with secrets stripped — safe to expose. */
 export type SafeJobRequest = Omit<JobRequest, "provider_api_key" | "github_pat">;
@@ -15,6 +16,7 @@ export type { SandboxState };
 export interface Job {
   id: string;
   ownerId: string;
+  title: string | null;
   status: JobStatus;
   request: SafeJobRequest;
   sandboxId: string | null;
@@ -25,6 +27,7 @@ export interface Job {
   prUrl: string | null;
   resultStatus: string | null;
   error: string | null;
+  archivedAt: string | null;
   createdAt: string;
   runner: DaytonaRunner | null;
 }
@@ -42,6 +45,7 @@ class JobManager {
     const job: Job = {
       id: randomUUID(),
       ownerId,
+      title: null,
       status: "provisioning",
       request: safe,
       sandboxId: null,
@@ -52,6 +56,7 @@ class JobManager {
       prUrl: null,
       resultStatus: null,
       error: null,
+      archivedAt: null,
       createdAt: new Date().toISOString(),
       runner: null,
     };
@@ -61,6 +66,7 @@ class JobManager {
     store.insertConversation({
       id: job.id,
       owner_id: ownerId,
+      title: null,
       status: job.status,
       issue_id: safe.issue_id ?? null,
       repo: safe.repo,
@@ -73,6 +79,7 @@ class JobManager {
       pr_url: null,
       result_status: null,
       error: null,
+      archived_at: null,
       created_at: job.createdAt,
     });
 
@@ -93,32 +100,38 @@ class JobManager {
     id: string,
     patch: Partial<{
       status: JobStatus;
+      title: string | null;
       sandboxId: string | null;
       sandboxState: SandboxState;
       sandboxDetails: SandboxDetails | null;
       prUrl: string | null;
       resultStatus: string | null;
       error: string | null;
+      archivedAt: string | null;
     }>,
-  ): void {
+  ): Promise<MutationResult> {
     const job = this.jobs.get(id);
-    if (!job) return;
+    if (!job) return Promise.resolve({ ok: false, error: "job not found" });
     if (patch.status !== undefined) job.status = patch.status;
+    if (patch.title !== undefined) job.title = patch.title;
     if (patch.sandboxId !== undefined) job.sandboxId = patch.sandboxId;
     if (patch.sandboxState !== undefined) job.sandboxState = patch.sandboxState;
     if (patch.sandboxDetails !== undefined) job.sandboxDetails = patch.sandboxDetails;
     if (patch.prUrl !== undefined) job.prUrl = patch.prUrl;
     if (patch.resultStatus !== undefined) job.resultStatus = patch.resultStatus;
     if (patch.error !== undefined) job.error = patch.error;
+    if (patch.archivedAt !== undefined) job.archivedAt = patch.archivedAt;
 
-    store.updateConversation(id, {
+    return store.updateConversation(id, {
       status: patch.status,
+      title: patch.title,
       sandbox_id: patch.sandboxId,
       sandbox_state: patch.sandboxState,
       sandbox_details: patch.sandboxDetails,
       pr_url: patch.prUrl,
       result_status: patch.resultStatus,
       error: patch.error,
+      archived_at: patch.archivedAt,
     });
   }
 
@@ -127,10 +140,59 @@ class JobManager {
     await store.finalizeConversation(id);
   }
 
-  list(ownerId: string): Job[] {
+  list(ownerId: string, archived = false): Job[] {
     return [...this.jobs.values()]
-      .filter((job) => job.ownerId === ownerId)
+      .filter((job) => job.ownerId === ownerId && (archived ? !!job.archivedAt : !job.archivedAt))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  rename(id: string, ownerId: string, title: string): Job | null {
+    const job = this.getForUser(id, ownerId);
+    if (!job) return null;
+    this.update(id, { title });
+    return job;
+  }
+
+  setArchived(id: string, ownerId: string, archived: boolean): Job | null {
+    const job = this.getForUser(id, ownerId);
+    if (!job) return null;
+    this.update(id, { archivedAt: archived ? new Date().toISOString() : null });
+    return job;
+  }
+
+  async prepareDeleteForUser(id: string, ownerId: string): Promise<boolean> {
+    const job = this.getForUser(id, ownerId);
+    if (!job) return false;
+    if (job.runner && job.sandboxState !== "destroyed") {
+      try {
+        await job.runner.destroySandbox();
+      } catch {
+        /* best-effort: delete the conversation even if Daytona cleanup fails */
+      }
+    }
+    await store.finalizeConversation(id);
+    return true;
+  }
+
+  removeForUser(id: string, ownerId: string): boolean {
+    const job = this.getForUser(id, ownerId);
+    if (!job) return false;
+    this.jobs.delete(id);
+    return true;
+  }
+
+  async deleteForUser(id: string, ownerId: string): Promise<boolean> {
+    const prepared = await this.prepareDeleteForUser(id, ownerId);
+    if (!prepared) return false;
+    return this.removeForUser(id, ownerId);
+  }
+
+  /** Dev HMR keeps the singleton instance but reloads the class; keep old jobs compatible. */
+  ensureCurrentShape(): void {
+    for (const job of this.jobs.values()) {
+      if (job.title === undefined) job.title = null;
+      if (job.archivedAt === undefined) job.archivedAt = null;
+    }
   }
 
   setStatus(id: string, status: JobStatus): void {
@@ -228,4 +290,10 @@ class JobManager {
 
 // HMR-safe singleton.
 const g = globalThis as unknown as { __jobManager?: JobManager };
-export const jobManager: JobManager = g.__jobManager ?? (g.__jobManager = new JobManager());
+if (g.__jobManager) {
+  Object.setPrototypeOf(g.__jobManager, JobManager.prototype);
+  g.__jobManager.ensureCurrentShape();
+} else {
+  g.__jobManager = new JobManager();
+}
+export const jobManager: JobManager = g.__jobManager;

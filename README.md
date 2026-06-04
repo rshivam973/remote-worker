@@ -115,14 +115,15 @@ See `.env.example` for the documented list. Summary:
 Optional but recommended — without it, conversations live only in server memory and vanish on restart.
 
 1. Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor (creates `conversations` +
-   `events`, including `conversations.owner_id` for the Clerk user id; RLS on with no policies — server-only via
+   `events`, including `conversations.owner_id` for the Clerk user id, `title` for rename, `archived_at` for
+   archive state, and `sandbox_details` for Daytona status snapshots; RLS on with no policies — server-only via
    the service-role key).
 2. Add `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` to `.env`.
 
 **Design** — DB is the durable source of truth; the in-memory layer is the live cache and writes through:
 - **Conversations:** inserted on create with `owner_id = Clerk userId`; status / sandbox state / sandbox details /
-  PR / error patched as they change. `sandbox_details` stores the last known Daytona snapshot (id, raw state,
-  resources, timestamps, error reason, last check time).
+  title / archive state / PR / error patched as they change. `sandbox_details` stores the last known Daytona
+  snapshot (id, raw state, resources, timestamps, error reason, last check time).
 - **Event log:** `llm_text` deltas are **coalesced**, writes are **batched** (every 750 ms / 25 events, immediate
   on `pr_created`/`done`/`error`/`user_msg`), each event carries a per-conversation `seq` for replay ordering.
   Persistence runs behind the live stream and never blocks it.
@@ -151,8 +152,10 @@ npm run typecheck
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/jobs` | `POST` | Create a dispatch (validates `JobRequest`, launches orchestration). |
-| `/api/jobs` | `GET` | List conversations (from DB; falls back to memory). |
+| `/api/jobs?archived=false` | `GET` | List active or archived conversations (from DB; falls back to memory). |
 | `/api/jobs/:id` | `GET` | Conversation detail + status (live from memory, else DB). |
+| `/api/jobs/:id` | `PATCH` | Rename or archive/unarchive a conversation (`{title?, archived?}`). |
+| `/api/jobs/:id` | `DELETE` | Permanently delete a conversation and event history; best-effort destroys its sandbox. |
 | `/api/jobs/:id/events` | `GET` (SSE) | Replay history + stream live events. |
 | `/api/jobs/:id/control` | `POST` | `{type: chat|status|interrupt|resume|stop, text?}` → relayed to pi-coder's stdin. |
 | `/api/jobs/:id/sandbox` | `POST` | `{action: stop|start|destroy}` → sandbox lifecycle. |
@@ -160,15 +163,16 @@ npm run typecheck
 The `JobRequest`'s `issue_id` is optional — when blank the server derives a label from the task
 (e.g. `feature-add-dark-mode`) so the branch/PR still get a sensible name.
 
-All job APIs require a Clerk session. Users can list, inspect, stream, chat with, stop/start, or destroy only
-jobs whose `owner_id` matches their Clerk `userId`.
+All job APIs require a Clerk session. Users can list, rename, archive, delete, inspect, stream, chat with,
+stop/start, or destroy only jobs whose `owner_id` matches their Clerk `userId`.
 
 ---
 
 ## UI
 
 - **`/`** — dashboard: a sidebar of conversations (status dots, sandbox state) + a **New dispatch** modal + the
-  live console for the selected job. Clerk's user menu lives in the sidebar.
+  live console for the selected job. Clerk's user menu lives in the sidebar. The sidebar includes active/archived
+  views and selected-conversation actions for Rename, Archive/Restore, and Delete.
 - **`/sign-in` / `/sign-up`** — Clerk-hosted authentication components styled for the control-room shell.
 - **Console** — a color-coded event timeline (phases, tool calls, streamed text, tests, review, PR link) with an
   **always-on chat**. Plain text steers/asks the agent; slash commands `/status` `/interrupt` `/resume` `/stop`
@@ -212,7 +216,7 @@ app/
   sign-up/[[...sign-up]]/page.tsx # Clerk sign-up
   jobs/[id]/page.tsx             # deep link
   api/jobs/route.ts              # POST create / GET list
-  api/jobs/[id]/route.ts         # GET detail
+  api/jobs/[id]/route.ts         # GET detail / PATCH rename-archive / DELETE
   api/jobs/[id]/events/route.ts  # SSE
   api/jobs/[id]/control/route.ts # chat/status/interrupt/resume/stop
   api/jobs/[id]/sandbox/route.ts # stop/start/destroy
