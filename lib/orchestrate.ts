@@ -30,7 +30,12 @@ async function run(job: Job, request: JobRequest): Promise<void> {
     jobManager.setStatus(id, "provisioning");
     jobManager.emitPlatform(id, "Provisioning Daytona sandbox…");
     await runner.provision(env);
-    jobManager.update(id, { sandboxId: runner.sandboxId, sandboxState: "active" });
+    const details = await runner.refreshSandboxDetails();
+    jobManager.update(id, {
+      sandboxId: runner.sandboxId,
+      sandboxState: details?.state ?? "active",
+      sandboxDetails: details,
+    });
     jobManager.emitPlatform(id, `Sandbox ready (${runner.sandboxId}).`);
 
     jobManager.setStatus(id, "bootstrapping");

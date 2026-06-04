@@ -8,12 +8,32 @@ export type JobStatus =
 
 export type SandboxState = "pending" | "active" | "stopped" | "destroyed";
 
+export interface SandboxDetails {
+  id: string | null;
+  name?: string | null;
+  state: SandboxState;
+  raw_state?: string | null;
+  cpu?: number | null;
+  memory?: number | null;
+  disk?: number | null;
+  target?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_activity_at?: string | null;
+  auto_stop_interval?: number | null;
+  auto_delete_interval?: number | null;
+  error_reason?: string | null;
+  checked_at: string;
+  unavailable_reason?: string | null;
+}
+
 export interface JobSummary {
   id: string;
   status: JobStatus;
   issue_id: string;
   repo: string;
   sandbox_state: SandboxState;
+  sandbox_details: SandboxDetails | null;
   pr_url: string | null;
   created_at: string;
 }
@@ -29,6 +49,7 @@ export interface JobDetail extends JobSummary {
   sandbox_id: string | null;
   result_status: string | null;
   error: string | null;
+  live: boolean;
 }
 
 export interface PiEvent {

@@ -15,7 +15,15 @@ const TONES: Record<string, string> = {
   usermsg: "text-amber font-medium",
 };
 
-export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () => void }) {
+export function JobConsole({
+  jobId,
+  onChange,
+  onNew,
+}: {
+  jobId: string;
+  onChange: () => void;
+  onNew: () => void;
+}) {
   const [events, setEvents] = useState<PiEvent[]>([]);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [connected, setConnected] = useState(false);
@@ -73,6 +81,10 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
   async function send() {
     const raw = chat.trim();
     if (!raw) return;
+    if (detail && (detail.sandbox_state === "destroyed" || !detail.live)) {
+      note("This conversation is historical. Create a new dispatch to continue work.", "error");
+      return;
+    }
     setChat("");
 
     const slash = raw.startsWith("/") ? raw.slice(1).split(/\s+/)[0]?.toLowerCase() : null;
@@ -111,7 +123,15 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
       });
       if (res.ok) {
         const data = await res.json();
-        setDetail((d) => (d ? { ...d, sandbox_state: data.sandbox_state as SandboxState } : d));
+        setDetail((d) =>
+          d
+            ? {
+                ...d,
+                sandbox_state: data.sandbox_state as SandboxState,
+                sandbox_details: data.sandbox_details ?? d.sandbox_details,
+              }
+            : d,
+        );
         onChange();
       }
     } finally {
@@ -123,7 +143,10 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
   const status = detail?.status ?? "provisioning";
   const sbState = detail?.sandbox_state ?? "pending";
   const isRunning = ACTIVE_STATUSES.has(status);
-  const hasSandbox = !!detail?.sandbox_id && sbState !== "destroyed";
+  const sandboxGone = sbState === "destroyed";
+  const readOnlyHistory = !!detail && !detail.live;
+  const hasSandbox = !!detail?.live && !!detail?.sandbox_id && !sandboxGone;
+  const chatDisabled = sandboxGone || readOnlyHistory;
 
   return (
     <div className="flex h-screen flex-1 flex-col">
@@ -163,6 +186,10 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
         </span>
       </div>
 
+      {(sandboxGone || readOnlyHistory) && detail && (
+        <SandboxNotice detail={detail} onNew={onNew} />
+      )}
+
       {/* Event log */}
       <div ref={logRef} className="flex-1 overflow-y-auto px-5 py-4 font-mono text-[12.5px] leading-relaxed">
         {events.length === 0 && <p className="text-faint">Awaiting telemetry…</p>}
@@ -178,12 +205,18 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
             value={chat}
             onChange={(e) => setChat(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Message the agent — type to steer, or /status /interrupt /resume /stop"
-            className="min-w-[200px] flex-1 rounded-sm border border-line bg-bg/60 px-3 py-2 text-sm placeholder:text-faint focus:border-amber focus:outline-none"
+            disabled={chatDisabled}
+            placeholder={
+              chatDisabled
+                ? "This conversation is read-only. Start a new dispatch to continue."
+                : "Message the agent — type to steer, or /status /interrupt /resume /stop"
+            }
+            className="min-w-[200px] flex-1 rounded-sm border border-line bg-bg/60 px-3 py-2 text-sm placeholder:text-faint focus:border-amber focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
           <button
             onClick={send}
-            className="bg-amber px-4 py-2 text-xs font-bold uppercase tracking-wider text-black hover:bg-amber-deep transition-colors"
+            disabled={chatDisabled}
+            className="bg-amber px-4 py-2 text-xs font-bold uppercase tracking-wider text-black hover:bg-amber-deep disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
           >
             Send
           </button>
@@ -198,6 +231,40 @@ export function JobConsole({ jobId, onChange }: { jobId: string; onChange: () =>
 }
 
 // --- small presentational pieces ------------------------------------------
+
+function SandboxNotice({ detail, onNew }: { detail: JobDetail; onNew: () => void }) {
+  const checkedAt = detail.sandbox_details?.checked_at
+    ? new Date(detail.sandbox_details.checked_at).toLocaleString()
+    : null;
+  const destroyed = detail.sandbox_state === "destroyed";
+  return (
+    <div className="border-b border-err/30 bg-err/10 px-5 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-err">
+            {destroyed ? "Sandbox destroyed" : "Read-only history"}
+          </div>
+          <p className="mt-1 text-sm text-ink">
+            {destroyed
+              ? "The sandbox for this conversation no longer exists. The timeline is preserved, but the agent cannot continue from here."
+              : "This conversation was loaded from persisted history, so this server no longer has the live agent runner attached."}
+          </p>
+          <p className="mt-1 font-mono text-[10px] text-faint">
+            {detail.sandbox_id ? `sandbox=${detail.sandbox_id}` : "sandbox=none"}
+            {detail.sandbox_details?.raw_state ? ` · daytona=${detail.sandbox_details.raw_state}` : ""}
+            {checkedAt ? ` · checked=${checkedAt}` : ""}
+          </p>
+        </div>
+        <button
+          onClick={onNew}
+          className="border border-amber/40 bg-amber/10 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.14em] text-amber hover:bg-amber/20"
+        >
+          New dispatch
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function StatusPill({ status, live }: { status: JobDetail["status"]; live: boolean }) {
   const meta = STATUS_META[status];

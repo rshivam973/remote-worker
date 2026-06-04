@@ -4,11 +4,15 @@ import { jobManager } from "@/lib/job-manager";
 import { startJob } from "@/lib/orchestrate";
 import { deriveIssueId } from "@/lib/task-builder";
 import { storeEnabled, listConversations } from "@/lib/store";
+import { currentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const userId = await currentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   let body: unknown;
   try {
     body = await req.json();
@@ -28,15 +32,18 @@ export async function POST(req: Request) {
   // and the dashboard all show a consistent, readable identifier.
   const data = { ...parsed.data, issue_id: parsed.data.issue_id?.trim() || deriveIssueId(parsed.data.instructions) };
 
-  const job = jobManager.create(data);
+  const job = jobManager.create(data, userId);
   startJob(job, data);
   return NextResponse.json({ job_id: job.id });
 }
 
 export async function GET() {
+  const userId = await currentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   // DB is the durable source of truth (survives restarts); fall back to memory.
   if (storeEnabled()) {
-    const rows = await listConversations();
+    const rows = await listConversations(userId);
     return NextResponse.json({
       jobs: rows.map((r) => ({
         id: r.id,
@@ -44,18 +51,20 @@ export async function GET() {
         issue_id: r.issue_id,
         repo: r.repo,
         sandbox_state: r.sandbox_state,
+        sandbox_details: r.sandbox_details,
         pr_url: r.pr_url,
         created_at: r.created_at,
       })),
     });
   }
   return NextResponse.json({
-    jobs: jobManager.list().map((j) => ({
+    jobs: jobManager.list(userId).map((j) => ({
       id: j.id,
       status: j.status,
       issue_id: j.request.issue_id,
       repo: j.request.repo,
       sandbox_state: j.sandboxState,
+      sandbox_details: j.sandboxDetails,
       pr_url: j.prUrl,
       created_at: j.createdAt,
     })),

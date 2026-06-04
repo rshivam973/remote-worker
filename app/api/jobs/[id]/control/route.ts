@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { controlCommandSchema } from "@/lib/contracts";
 import { jobManager } from "@/lib/job-manager";
+import { currentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const job = jobManager.get(id);
+  const userId = await currentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const job = jobManager.getForUser(id, userId);
   if (!job) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   let body: unknown;

@@ -14,10 +14,11 @@
  *  - Each event carries a per-conversation `seq` for stable replay ordering.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { PiEvent, JobStatus, SandboxState } from "./contracts";
+import type { PiEvent, JobStatus, SandboxDetails, SandboxState } from "./contracts";
 
 export interface ConversationRow {
   id: string;
+  owner_id: string;
   status: JobStatus;
   issue_id: string | null;
   repo: string;
@@ -26,6 +27,7 @@ export interface ConversationRow {
   provider: { name: string; model: string } | null;
   sandbox_id: string | null;
   sandbox_state: SandboxState;
+  sandbox_details: SandboxDetails | null;
   pr_url: string | null;
   result_status: string | null;
   error: string | null;
@@ -33,7 +35,10 @@ export interface ConversationRow {
 }
 
 export type ConversationPatch = Partial<
-  Pick<ConversationRow, "status" | "sandbox_id" | "sandbox_state" | "pr_url" | "result_status" | "error">
+  Pick<
+    ConversationRow,
+    "status" | "sandbox_id" | "sandbox_state" | "sandbox_details" | "pr_url" | "result_status" | "error"
+  >
 >;
 
 let client: SupabaseClient | null | undefined;
@@ -76,12 +81,13 @@ export function updateConversation(id: string, patch: ConversationPatch): void {
     .then(({ error }) => error && console.error("[store] updateConversation:", error.message));
 }
 
-export async function listConversations(): Promise<ConversationRow[]> {
+export async function listConversations(ownerId: string): Promise<ConversationRow[]> {
   const db = getClient();
   if (!db) return [];
   const { data, error } = await db
     .from("conversations")
     .select("*")
+    .eq("owner_id", ownerId)
     .order("created_at", { ascending: false })
     .limit(200);
   if (error) {
@@ -91,10 +97,15 @@ export async function listConversations(): Promise<ConversationRow[]> {
   return (data ?? []) as ConversationRow[];
 }
 
-export async function getConversation(id: string): Promise<ConversationRow | null> {
+export async function getConversation(id: string, ownerId: string): Promise<ConversationRow | null> {
   const db = getClient();
   if (!db) return null;
-  const { data, error } = await db.from("conversations").select("*").eq("id", id).maybeSingle();
+  const { data, error } = await db
+    .from("conversations")
+    .select("*")
+    .eq("id", id)
+    .eq("owner_id", ownerId)
+    .maybeSingle();
   if (error) {
     console.error("[store] getConversation:", error.message);
     return null;
