@@ -10,6 +10,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.4.3",
     "@daytonaio/sdk": "^0.183.0",
     "@supabase/supabase-js": "^2.106.2",
     "next": "^15.1.0",

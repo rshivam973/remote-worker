@@ -5,12 +5,13 @@
  * its stdin. No changes to pi-coder — its stdin/stdout contract is honored
  * directly over the SDK.
  */
-import { Daytona, type Sandbox } from "@daytonaio/sdk";
+import { Daytona, DaytonaNotFoundError, type Sandbox } from "@daytonaio/sdk";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { PiEvent, ControlCommand } from "./contracts";
+import type { PiEvent, ControlCommand, SandboxDetails } from "./contracts";
+import { destroyedSandboxSnapshot, snapshotSandbox } from "./sandbox-status";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,6 +61,21 @@ export class DaytonaRunner {
 
   get sandboxId(): string | null {
     return this.sandbox?.id ?? null;
+  }
+
+  async refreshSandboxDetails(): Promise<SandboxDetails | null> {
+    if (!this.sandbox) return null;
+    try {
+      await this.sandbox.refreshData();
+      return snapshotSandbox(this.sandbox);
+    } catch (err) {
+      if (err instanceof DaytonaNotFoundError || (err as { statusCode?: number }).statusCode === 404) {
+        const details = destroyedSandboxSnapshot(this.sandbox.id, "Daytona reports this sandbox was destroyed or deleted.");
+        this.sandbox = null;
+        return details;
+      }
+      throw err;
+    }
   }
 
   /** Create the sandbox with the run secrets injected as env vars. */
@@ -217,19 +233,23 @@ export class DaytonaRunner {
   }
 
   /** Suspend the sandbox (Daytona also auto-stops idle ones). */
-  async stopSandbox(): Promise<void> {
+  async stopSandbox(): Promise<SandboxDetails | null> {
     await this.sb().stop(60);
+    return this.refreshSandboxDetails();
   }
 
   /** Resume a stopped sandbox. */
-  async startSandbox(): Promise<void> {
+  async startSandbox(): Promise<SandboxDetails | null> {
     await this.sb().start(60);
+    return this.refreshSandboxDetails();
   }
 
   /** Destroy the sandbox permanently. */
-  async destroySandbox(): Promise<void> {
+  async destroySandbox(): Promise<SandboxDetails> {
+    const id = this.sb().id;
     await this.sb().delete(60);
     this.sandbox = null;
+    return destroyedSandboxSnapshot(id, "Sandbox was destroyed from the PR Factory console.");
   }
 
   /** Alias used by the orchestrator's cleanup path. */

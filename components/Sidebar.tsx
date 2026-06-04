@@ -1,5 +1,6 @@
 "use client";
 
+import { UserButton } from "@clerk/nextjs";
 import { ACTIVE_STATUSES, STATUS_META, type JobSummary } from "./types";
 
 function repoShort(url: string): string {
@@ -36,6 +37,16 @@ export function Sidebar({
         <div className="leading-tight">
           <div className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-ink">PR Factory</div>
           <div className="text-[9px] uppercase tracking-[0.2em] text-faint">agent control</div>
+        </div>
+        <div className="ml-auto">
+          <UserButton
+            appearance={{
+              elements: {
+                avatarBox: "h-7 w-7 rounded-sm",
+                userButtonPopoverCard: "rounded-sm border border-line-bright bg-panel",
+              },
+            }}
+          />
         </div>
       </div>
 

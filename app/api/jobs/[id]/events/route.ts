@@ -1,6 +1,7 @@
 import { jobManager } from "@/lib/job-manager";
 import { getConversation, getEvents } from "@/lib/store";
 import type { PiEvent } from "@/lib/contracts";
+import { currentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,11 +16,15 @@ const SSE_HEADERS = {
 /** Server-Sent Events stream of a job's pi-coder + platform events. */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const userId = await currentUserId();
+  if (!userId) return new Response("unauthorized", { status: 401 });
+
   const job = jobManager.get(id);
+  if (job && job.ownerId !== userId) return new Response("not found", { status: 404 });
 
   // Historical job (not live in this process): replay the durable log, then close.
   if (!job) {
-    const row = await getConversation(id);
+    const row = await getConversation(id, userId);
     if (!row) return new Response("not found", { status: 404 });
     const history = await getEvents(id);
     const encoder = new TextEncoder();

@@ -3,7 +3,7 @@
  * long-lived (next start). Survives dev HMR via a globalThis singleton.
  */
 import { randomUUID } from "node:crypto";
-import type { JobRequest, JobStatus, SandboxState, PiEvent, ControlCommand } from "./contracts";
+import type { JobRequest, JobStatus, SandboxDetails, SandboxState, PiEvent, ControlCommand } from "./contracts";
 import type { DaytonaRunner } from "./daytona-runner";
 import * as store from "./store";
 
@@ -14,10 +14,12 @@ export type { SandboxState };
 
 export interface Job {
   id: string;
+  ownerId: string;
   status: JobStatus;
   request: SafeJobRequest;
   sandboxId: string | null;
   sandboxState: SandboxState;
+  sandboxDetails: SandboxDetails | null;
   events: PiEvent[];
   subscribers: Set<(e: PiEvent) => void>;
   prUrl: string | null;
@@ -35,14 +37,16 @@ const TERMINAL: ReadonlySet<JobStatus> = new Set(["completed", "failed", "stoppe
 class JobManager {
   private readonly jobs = new Map<string, Job>();
 
-  create(request: JobRequest): Job {
+  create(request: JobRequest, ownerId: string): Job {
     const { provider_api_key: _k, github_pat: _p, ...safe } = request;
     const job: Job = {
       id: randomUUID(),
+      ownerId,
       status: "provisioning",
       request: safe,
       sandboxId: null,
       sandboxState: "pending",
+      sandboxDetails: null,
       events: [],
       subscribers: new Set(),
       prUrl: null,
@@ -56,6 +60,7 @@ class JobManager {
     // Persist the conversation (DB = durable source of truth).
     store.insertConversation({
       id: job.id,
+      owner_id: ownerId,
       status: job.status,
       issue_id: safe.issue_id ?? null,
       repo: safe.repo,
@@ -64,6 +69,7 @@ class JobManager {
       provider: safe.provider ?? null,
       sandbox_id: null,
       sandbox_state: job.sandboxState,
+      sandbox_details: null,
       pr_url: null,
       result_status: null,
       error: null,
@@ -77,6 +83,11 @@ class JobManager {
     return this.jobs.get(id);
   }
 
+  getForUser(id: string, ownerId: string): Job | undefined {
+    const job = this.jobs.get(id);
+    return job?.ownerId === ownerId ? job : undefined;
+  }
+
   /** Merge a patch into a live job AND persist it. Flushes the event log on terminal status. */
   update(
     id: string,
@@ -84,6 +95,7 @@ class JobManager {
       status: JobStatus;
       sandboxId: string | null;
       sandboxState: SandboxState;
+      sandboxDetails: SandboxDetails | null;
       prUrl: string | null;
       resultStatus: string | null;
       error: string | null;
@@ -94,6 +106,7 @@ class JobManager {
     if (patch.status !== undefined) job.status = patch.status;
     if (patch.sandboxId !== undefined) job.sandboxId = patch.sandboxId;
     if (patch.sandboxState !== undefined) job.sandboxState = patch.sandboxState;
+    if (patch.sandboxDetails !== undefined) job.sandboxDetails = patch.sandboxDetails;
     if (patch.prUrl !== undefined) job.prUrl = patch.prUrl;
     if (patch.resultStatus !== undefined) job.resultStatus = patch.resultStatus;
     if (patch.error !== undefined) job.error = patch.error;
@@ -102,6 +115,7 @@ class JobManager {
       status: patch.status,
       sandbox_id: patch.sandboxId,
       sandbox_state: patch.sandboxState,
+      sandbox_details: patch.sandboxDetails,
       pr_url: patch.prUrl,
       result_status: patch.resultStatus,
       error: patch.error,
@@ -113,8 +127,10 @@ class JobManager {
     await store.finalizeConversation(id);
   }
 
-  list(): Job[] {
-    return [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  list(ownerId: string): Job[] {
+    return [...this.jobs.values()]
+      .filter((job) => job.ownerId === ownerId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   setStatus(id: string, status: JobStatus): void {
@@ -181,19 +197,32 @@ class JobManager {
     if (job.sandboxState === "destroyed") throw new Error("sandbox already destroyed");
 
     if (action === "stop") {
-      await job.runner.stopSandbox();
-      this.update(id, { sandboxState: "stopped" });
+      const details = await job.runner.stopSandbox();
+      this.update(id, { sandboxState: details?.state ?? "stopped", sandboxDetails: details });
       this.emitPlatform(id, "Sandbox stopped.");
     } else if (action === "start") {
-      await job.runner.startSandbox();
-      this.update(id, { sandboxState: "active" });
+      const details = await job.runner.startSandbox();
+      this.update(id, { sandboxState: details?.state ?? "active", sandboxDetails: details });
       this.emitPlatform(id, "Sandbox resumed.");
     } else {
-      await job.runner.destroySandbox();
-      this.update(id, { sandboxState: "destroyed" });
+      const details = await job.runner.destroySandbox();
+      this.update(id, { sandboxState: "destroyed", sandboxDetails: details });
       this.emitPlatform(id, "Sandbox destroyed.");
     }
     return job.sandboxState;
+  }
+
+  async refreshSandboxDetails(id: string): Promise<SandboxDetails | null> {
+    const job = this.jobs.get(id);
+    if (!job?.runner || job.sandboxState === "destroyed") return job?.sandboxDetails ?? null;
+    let details: SandboxDetails | null;
+    try {
+      details = await job.runner.refreshSandboxDetails();
+    } catch {
+      return job.sandboxDetails;
+    }
+    if (details) this.update(id, { sandboxState: details.state, sandboxDetails: details });
+    return details;
   }
 }
 

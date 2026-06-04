@@ -85,11 +85,12 @@ Throughout, conversation metadata + the event log are persisted to Supabase.
 
 ```bash
 npm install
-cp .env.example .env     # fill in DAYTONA_API_KEY (+ optionally Supabase)
+cp .env.example .env     # fill in Clerk + DAYTONA_API_KEY (+ optionally Supabase)
 ```
 
-You need a **Daytona** account/API key. The LLM key and GitHub PAT are **not** set here — users enter them per
-dispatch in the form, and they're injected into each sandbox as env vars.
+You need a **Clerk** application for authentication and a **Daytona** account/API key for sandboxing. The LLM
+key and GitHub PAT are **not** set here — users enter them per dispatch in the form, and they're injected into
+each sandbox as env vars.
 
 ---
 
@@ -99,6 +100,8 @@ See `.env.example` for the documented list. Summary:
 
 | Var | Required | Purpose |
 |-----|----------|---------|
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | ✅ | User auth, sessions, and route protection. |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` / `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | ✅ | Local Clerk auth pages (`/sign-in`, `/sign-up`). |
 | `DAYTONA_API_KEY` | ✅ | Provision/control sandboxes. |
 | `PI_CODER_SOURCE` | – | `upload` (tar+upload local `../pi-coding-agent`) or `git` (clone `PI_CODER_REPO_URL`). |
 | `PI_CODER_REPO_URL` / `PI_CODER_LOCAL_PATH` | – | Source location for the chosen mode. |
@@ -112,16 +115,21 @@ See `.env.example` for the documented list. Summary:
 Optional but recommended — without it, conversations live only in server memory and vanish on restart.
 
 1. Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor (creates `conversations` +
-   `events`, RLS on with no policies — server-only via the service-role key).
+   `events`, including `conversations.owner_id` for the Clerk user id; RLS on with no policies — server-only via
+   the service-role key).
 2. Add `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` to `.env`.
 
 **Design** — DB is the durable source of truth; the in-memory layer is the live cache and writes through:
-- **Conversations:** inserted on create; status / sandbox state / PR / error patched as they change.
+- **Conversations:** inserted on create with `owner_id = Clerk userId`; status / sandbox state / sandbox details /
+  PR / error patched as they change. `sandbox_details` stores the last known Daytona snapshot (id, raw state,
+  resources, timestamps, error reason, last check time).
 - **Event log:** `llm_text` deltas are **coalesced**, writes are **batched** (every 750 ms / 25 events, immediate
   on `pr_created`/`done`/`error`/`user_msg`), each event carries a per-conversation `seq` for replay ordering.
   Persistence runs behind the live stream and never blocks it.
-- **Reads:** the sidebar list, job detail, and SSE *replay* come from the DB (so they survive restarts); **live**
-  jobs still stream raw deltas from memory. Control/sandbox actions require the live runner in this process.
+- **Reads:** the sidebar list, job detail, and SSE *replay* come from the DB, filtered by the signed-in Clerk
+  user. Opening a job detail refreshes the saved Daytona sandbox status when a sandbox id exists; if Daytona
+  reports it missing/deleted, the conversation is marked `destroyed`. **Live** jobs still stream raw deltas from
+  memory. Control/sandbox actions require the live runner in this process.
 
 ---
 
@@ -152,12 +160,16 @@ npm run typecheck
 The `JobRequest`'s `issue_id` is optional — when blank the server derives a label from the task
 (e.g. `feature-add-dark-mode`) so the branch/PR still get a sensible name.
 
+All job APIs require a Clerk session. Users can list, inspect, stream, chat with, stop/start, or destroy only
+jobs whose `owner_id` matches their Clerk `userId`.
+
 ---
 
 ## UI
 
 - **`/`** — dashboard: a sidebar of conversations (status dots, sandbox state) + a **New dispatch** modal + the
-  live console for the selected job.
+  live console for the selected job. Clerk's user menu lives in the sidebar.
+- **`/sign-in` / `/sign-up`** — Clerk-hosted authentication components styled for the control-room shell.
 - **Console** — a color-coded event timeline (phases, tool calls, streamed text, tests, review, PR link) with an
   **always-on chat**. Plain text steers/asks the agent; slash commands `/status` `/interrupt` `/resume` `/stop`
   replace buttons. A separate **Sandbox** row has Resume / Stop / Destroy.
@@ -171,6 +183,10 @@ Sandboxes are **kept alive** after a run (so you can inspect/resume/destroy and 
 `autoStopInterval` stops idle sandboxes and `autoDeleteInterval` is the backstop. The **Resume** control revives a
 stopped sandbox (Daytona auto-stops free sandboxes); **Destroy** removes it permanently.
 
+When a user reopens an older conversation, `/api/jobs/:id` refreshes the stored Daytona sandbox snapshot. If the
+sandbox has been destroyed or auto-deleted, the dashboard shows a read-only warning and asks the user to create a
+new dispatch. The old event timeline and PR link remain visible as history.
+
 ---
 
 ## Security
@@ -178,6 +194,10 @@ stopped sandbox (Daytona auto-stops free sandboxes); **Destroy** removes it perm
 - Secrets (LLM key, GitHub PAT) exist only: in the POST body over HTTPS, injected as sandbox env vars, and
   transiently in server memory while creating the sandbox. They are **never** logged, returned to the browser, or
   written to `task.json` / the DB.
+- Clerk handles authentication, sessions, sign-in, sign-up, and user management. The platform stores only the
+  Clerk `userId` as `conversations.owner_id`.
+- Every job route checks ownership before returning history, opening an SSE stream, relaying control, or changing
+  sandbox state.
 - The Supabase **service-role** key is server-side only (RLS on, no policies — nothing else can touch the tables).
 - Per-job sandboxes give data-plane isolation; Stop/Destroy + Daytona TTLs guarantee cleanup.
 
@@ -187,7 +207,9 @@ stopped sandbox (Daytona auto-stops free sandboxes); **Destroy** removes it perm
 
 ```
 app/
-  page.tsx                       # dashboard (renders <Dashboard/>)
+  page.tsx                       # authenticated dashboard (renders <Dashboard/>)
+  sign-in/[[...sign-in]]/page.tsx # Clerk sign-in
+  sign-up/[[...sign-up]]/page.tsx # Clerk sign-up
   jobs/[id]/page.tsx             # deep link
   api/jobs/route.ts              # POST create / GET list
   api/jobs/[id]/route.ts         # GET detail
@@ -196,8 +218,9 @@ app/
   api/jobs/[id]/sandbox/route.ts # stop/start/destroy
 components/                      # Dashboard, Sidebar, JobConsole, NewJobModal
 lib/
-  job-manager.ts   daytona-runner.ts   orchestrate.ts
+  auth.ts          job-manager.ts      daytona-runner.ts   orchestrate.ts
   task-builder.ts  store.ts            contracts.ts
+middleware.ts                       # Clerk route protection
 supabase/schema.sql
 ```
 
@@ -205,7 +228,7 @@ supabase/schema.sql
 
 ## Limitations (MVP)
 
-- **Single-user, no auth.** Job control needs the originating server process — a restarted server can view
-  conversation history (from the DB) but can't re-drive a previously live sandbox.
+- **Live control is still process-local.** A restarted server can view the signed-in user's conversation history
+  from the DB, but can't re-drive a previously live sandbox.
 - No queueing, retries, or cost dashboards yet.
 - pi-coder install via `upload` works today; `git` mode clones the published repo.

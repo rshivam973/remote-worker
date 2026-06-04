@@ -40,7 +40,7 @@ export function Dashboard({ initialJobId }: { initialJobId?: string }) {
 
       <main className="flex-1">
         {selectedId ? (
-          <JobConsole key={selectedId} jobId={selectedId} onChange={refresh} />
+          <JobConsole key={selectedId} jobId={selectedId} onChange={refresh} onNew={() => setModalOpen(true)} />
         ) : (
           <EmptyState onNew={() => setModalOpen(true)} />
         )}
